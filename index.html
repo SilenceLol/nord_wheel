@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <title>NORD WHEEL - Авторизация</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+    <div class="container auth-container">
+        <header>
+            <div class="logo">
+                <img src="jpeg/logonwnew.png" alt="NORD WHEEL" class="logo-image" onerror="this.style.display='none'">
+                <span class="logo-text">NORD WHEEL</span>
+            </div>
+        </header>
+
+        <main class="auth-main">
+            <h1>Вход в систему</h1>
+            
+            <!-- Карточка авторизации -->
+            <div class="auth-card" id="loginCard">
+                <div class="auth-form">
+                    <h3>Введите ваш код доступа</h3>
+                    
+                    <div class="input-group">
+                        <input type="text"
+                               id="accessCode"
+                               placeholder="K9CM4CRF"
+                               maxlength="20"
+                               pattern="[A-Z0-9]{3,20}"
+                               inputmode="text"
+                               autocapitalize="characters"
+                               autofocus>
+                    </div>
+                    
+                    <button class="btn-auth" onclick="loginWithCode()">Войти</button>
+                    
+                    <div class="auth-divider">
+                        <span>Нет кода доступа?</span>
+                    </div>
+                    
+                    <button class="btn-secondary" onclick="showRegistration()">Регистрация</button>
+                </div>
+                
+                <!-- Статус -->
+                <div id="authStatus" class="auth-status"></div>
+            </div>
+            
+            <!-- Карточка регистрации (изначально скрыта) -->
+            <div class="auth-card" id="registerCard" style="display: none;">
+                <div class="auth-form">
+                    <h3>Регистрация</h3>
+                    
+                    <!-- Шаг 1: Ввод телефона -->
+                    <div id="phoneStep" class="step active">
+                        <p>Введите ваш номер телефона для проверки</p>
+                        <div class="input-group">
+                            <input type="tel"
+                                   id="phoneNumber"
+                                   placeholder="+7 (900) 123-45-67"
+                                   maxlength="20"
+                                   inputmode="tel">
+                        </div>
+                        <button class="btn-auth" onclick="sendVerificationCode()">Получить код</button>
+                    </div>
+                    
+                    <!-- Шаг 2: Ввод кода подтверждения -->
+                    <div id="codeStep" class="step" style="display: none;">
+                        <p>Введите код подтверждения из SMS/Telegram</p>
+                        <div class="input-group">
+                            <input type="text"
+                                   id="verificationCode"
+                                   placeholder="123456"
+                                   maxlength="6"
+                                   inputmode="numeric"
+                                   pattern="[0-9]{6}">
+                        </div>
+                        <div class="code-timer" id="codeTimer">
+                            Отправить код повторно через <span id="timerSeconds">60</span> сек
+                        </div>
+                        <button class="btn-auth" onclick="verifyCode()">Подтвердить</button>
+                    </div>
+                    
+                    <!-- Шаг 3: Успешная регистрация -->
+                    <div id="successStep" class="step" style="display: none;">
+                        <div class="success-icon">✅</div>
+                        <h3>Регистрация успешна!</h3>
+                        <p>Ваш уникальный код доступа:</p>
+                        <div class="access-code-display" id="generatedAccessCode">
+                            <!-- Сюда вставится сгенерированный код -->
+                        </div>
+                        <p class="small-text">Сохраните этот код. Он будет отправлен вам в Telegram.</p>
+                        <button class="btn-auth" onclick="completeRegistration()">Перейти к работе</button>
+                    </div>
+                </div>
+                
+                <!-- Кнопка возврата -->
+                <button class="btn-back" onclick="showLogin()">
+                    ← Вернуться ко входу
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <script src="auth-new.js"></script>
+</body>
+</html>
