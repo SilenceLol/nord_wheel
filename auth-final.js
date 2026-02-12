@@ -1,0 +1,562 @@
+// auth-final.js - ФИНАЛЬНАЯ ВЕРСИЯ С РЕАЛЬНЫМ API 1С
+
+// ==================== КОНФИГУРАЦИЯ ====================
+const API_CONFIG = {
+    BASE_URL: 'https://pe.matrix-1c.ru/m-cargo/hs/root',
+    TIMEOUT: 15000,
+    
+    // Если API требует авторизацию - раскомментируйте и вставьте свои данные
+    // AUTH: {
+    //     type: 'basic', // или 'apikey'
+    //     login: 'ваш_логин',
+    //     password: 'ваш_пароль',
+    //     apiKey: 'ваш_ключ'
+    // }
+};
+
+const STORAGE_KEYS = {
+    ACCESS_CODE: 'nord_wheel_access_code',
+    USER_DATA: 'nord_wheel_user_data',
+    PHONE_NUMBER: 'nord_wheel_phone',
+    LAST_LOGIN: 'nord_wheel_last_login'
+};
+
+// ==================== СОСТОЯНИЕ ====================
+let appState = {
+    phoneNumber: '',
+    verificationCode: '',
+    generatedAccessCode: '',
+    verificationAttempts: 0,
+    timerInterval: null,
+    currentStep: 'cached_check'
+};
+
+// DOM элементы
+let elements = {};
+
+// ==================== ИНИЦИАЛИЗАЦИЯ ====================
+document.addEventListener('DOMContentLoaded', async function() {
+    console.log('NORD WHEEL - Авторизация с API 1С');
+    initElements();
+    await checkCachedAccessCode();
+});
+
+function initElements() {
+    const ids = [
+        'cachedCheckCard', 'phoneInputCard', 'cachedStatus', 
+        'cachedActions', 'cachedUserName', 'phoneNumber',
+        'verificationCode', 'codeTimer', 'timerSeconds',
+        'backToPhoneBtn', 'phoneStep', 'codeStep',
+        'successStep', 'deniedStep', 'generatedAccessCode',
+        'deniedMessage', 'authStatus'
+    ];
+    
+    ids.forEach(id => {
+        elements[id] = document.getElementById(id);
+    });
+    
+    // Обработчики Enter
+    if (elements.phoneNumber) {
+        elements.phoneNumber.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendVerificationCode();
+        });
+    }
+    
+    if (elements.verificationCode) {
+        elements.verificationCode.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') verifyCode();
+        });
+    }
+}
+
+// ==================== 1. ПРОВЕРКА КЭШИРОВАННОГО КОДА ====================
+async function checkCachedAccessCode() {
+    appState.currentStep = 'cached_check';
+    
+    try {
+        const accessCode = localStorage.getItem(STORAGE_KEYS.ACCESS_CODE);
+        const userDataStr = localStorage.getItem(STORAGE_KEYS.USER_DATA);
+        const phoneNumber = localStorage.getItem(STORAGE_KEYS.PHONE_NUMBER);
+        
+        if (accessCode && userDataStr && phoneNumber) {
+            console.log('Найден кэшированный код:', accessCode);
+            
+            // Проверяем код на сервере (валидный ли еще)
+            const isValid = await validateCodeWithServer(accessCode, phoneNumber);
+            
+            if (isValid) {
+                const userData = JSON.parse(userDataStr);
+                showCachedUser(userData, accessCode);
+                return;
+            } else {
+                console.log('Код устарел или недействителен');
+                clearCache();
+            }
+        }
+    } catch (error) {
+        console.error('Ошибка при проверке кэша:', error);
+    }
+    
+    // Если нет валидного кода - показываем ввод телефона
+    showPhoneInput();
+}
+
+// Проверка кода на сервере 1С
+async function validateCodeWithServer(code, phone) {
+    try {
+        // Очищаем номер от всего кроме цифр
+        const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+        
+        const response = await fetch(`${API_CONFIG.BASE_URL}/validateToken`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                ...getAuthHeaders()
+            },
+            body: JSON.stringify({
+                number: cleanPhone,
+                token: code
+            })
+        });
+
+        if (!response.ok) return false;
+        
+        const data = await response.json();
+        return data.valid === true || data.success === true;
+        
+    } catch (error) {
+        console.error('Ошибка валидации кода:', error);
+        // Если сервер недоступен - доверяем кэшу (не больше 7 дней)
+        const lastLogin = localStorage.getItem(STORAGE_KEYS.LAST_LOGIN);
+        if (lastLogin) {
+            const daysDiff = (Date.now() - new Date(lastLogin)) / (1000 * 60 * 60 * 24);
+            return daysDiff < 7;
+        }
+        return false;
+    }
+}
+
+function showCachedUser(userData, accessCode) {
+    elements.cachedUserName.textContent = userData.name || userData.fullName || 'Пользователь';
+    elements.cachedStatus.style.display = 'none';
+    elements.cachedActions.style.display = 'block';
+    
+    appState.generatedAccessCode = accessCode;
+    appState.userData = userData;
+    appState.phoneNumber = localStorage.getItem(STORAGE_KEYS.PHONE_NUMBER);
+}
+
+// ==================== 2. ВВОД ТЕЛЕФОНА ====================
+function showPhoneInput() {
+    elements.cachedCheckCard.style.display = 'none';
+    elements.phoneInputCard.style.display = 'block';
+    resetToPhoneInput();
+}
+
+function resetToPhoneInput() {
+    appState.currentStep = 'phone_input';
+    
+    elements.phoneStep.style.display = 'block';
+    elements.codeStep.style.display = 'none';
+    elements.successStep.style.display = 'none';
+    elements.deniedStep.style.display = 'none';
+    elements.backToPhoneBtn.style.display = 'none';
+    
+    if (elements.phoneNumber) elements.phoneNumber.value = '';
+    if (elements.verificationCode) elements.verificationCode.value = '';
+    
+    stopCodeTimer();
+    showAuthStatus('Введите номер телефона', 'info');
+}
+
+// ==================== 3. ЗАПРОС К 1С: getNewToken ====================
+async function sendVerificationCode() {
+    const phone = elements.phoneNumber.value.trim();
+    
+    if (!phone) {
+        showAuthStatus('Введите номер телефона', 'error');
+        elements.phoneNumber.focus();
+        return;
+    }
+    
+    // Нормализуем номер: оставляем только 10 цифр для API
+    const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+    
+    if (cleanPhone.length !== 10) {
+        showAuthStatus('Введите корректный номер телефона', 'error');
+        elements.phoneNumber.focus();
+        return;
+    }
+    
+    showAuthStatus('Отправка запроса в 1С...', 'loading');
+    
+    try {
+        console.log('📤 Отправка запроса к 1С:', {
+            url: `${API_CONFIG.BASE_URL}/getNewToken`,
+            number: cleanPhone
+        });
+        
+        // === РЕАЛЬНЫЙ ЗАПРОС К ВАШЕМУ API ===
+        const response = await fetch(`${API_CONFIG.BASE_URL}/getNewToken`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                ...getAuthHeaders()
+            },
+            body: JSON.stringify({
+                number: cleanPhone
+            })
+        });
+        
+        console.log('📥 Статус ответа:', response.status);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('📦 Ответ от 1С:', data);
+        
+        // ВАЖНО: Адаптируйте под формат ответа вашего API!
+        // Предполагаем, что API возвращает:
+        // { success: true, code: "123456", message: "..." }
+        
+        // Проверяем, что код пришел
+        let verificationCode = null;
+        
+        if (data.code) {
+            verificationCode = data.code;
+        } else if (data.smsCode) {
+            verificationCode = data.smsCode;
+        } else if (data.token) {
+            verificationCode = data.token;
+        } else {
+            // Если API не возвращает код - генерируем тестовый
+            verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+            console.log('⚠️ API не вернул код, используем тестовый:', verificationCode);
+        }
+        
+        // Сохраняем данные
+        appState.phoneNumber = '+7' + cleanPhone;
+        
+        // Сохраняем код для проверки
+        if (!window.pendingVerifications) window.pendingVerifications = {};
+        window.pendingVerifications[cleanPhone] = {
+            code: verificationCode,
+            timestamp: Date.now(),
+            attempts: 0
+        };
+        
+        // Переходим к вводу кода
+        elements.phoneStep.style.display = 'none';
+        elements.codeStep.style.display = 'block';
+        elements.backToPhoneBtn.style.display = 'block';
+        appState.currentStep = 'code_input';
+        
+        startCodeTimer();
+        
+        setTimeout(() => {
+            if (elements.verificationCode) {
+                elements.verificationCode.focus();
+                elements.verificationCode.value = '';
+            }
+        }, 300);
+        
+        // Для отладки: показываем код
+        showAuthStatus(`📱 Код отправлен. Для теста: ${verificationCode}`, 'success');
+        
+    } catch (error) {
+        console.error('❌ Ошибка при запросе к 1С:', error);
+        
+        // === РЕЖИМ ТЕСТИРОВАНИЯ ===
+        // Если API недоступен - используем тестовый режим
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            console.log('🔄 Тестовый режим: эмуляция API');
+            emulateTestMode(cleanPhone);
+        } else {
+            showAuthStatus('Ошибка соединения с сервером. Проверьте интернет.', 'error');
+        }
+    }
+}
+
+// Тестовый режим для разработки
+function emulateTestMode(cleanPhone) {
+    const testCode = '123456';
+    
+    appState.phoneNumber = '+7' + cleanPhone;
+    
+    window.pendingVerifications = window.pendingVerifications || {};
+    window.pendingVerifications[cleanPhone] = {
+        code: testCode,
+        timestamp: Date.now(),
+        attempts: 0
+    };
+    
+    elements.phoneStep.style.display = 'none';
+    elements.codeStep.style.display = 'block';
+    elements.backToPhoneBtn.style.display = 'block';
+    appState.currentStep = 'code_input';
+    
+    startCodeTimer();
+    
+    setTimeout(() => {
+        if (elements.verificationCode) {
+            elements.verificationCode.focus();
+        }
+    }, 300);
+    
+    showAuthStatus(`🔧 ТЕСТОВЫЙ РЕЖИМ. Код: ${testCode}`, 'success');
+}
+
+// ==================== 4. ПРОВЕРКА КОДА ====================
+async function verifyCode() {
+    const code = elements.verificationCode.value.trim();
+    
+    if (!code || code.length !== 6 || !/^\d+$/.test(code)) {
+        showAuthStatus('Введите 6-значный код', 'error');
+        elements.verificationCode.focus();
+        return;
+    }
+    
+    appState.verificationAttempts++;
+    
+    if (appState.verificationAttempts > 5) {
+        showAuthStatus('Слишком много попыток. Запросите новый код.', 'error');
+        setTimeout(() => resetToPhoneInput(), 2000);
+        return;
+    }
+    
+    showAuthStatus('Проверка кода...', 'loading');
+    
+    const cleanPhone = appState.phoneNumber.replace(/\D/g, '').slice(-10);
+    const pending = window.pendingVerifications?.[cleanPhone];
+    
+    // Проверяем код
+    if (pending && pending.code === code && (Date.now() - pending.timestamp) < 10 * 60 * 1000) {
+        // Код верный - получаем постоянный код доступа
+        showAuthStatus('Код подтвержден! Получаем доступ...', 'loading');
+        
+        // Здесь API должен вернуть постоянный код доступа
+        // Если такого эндпоинта нет - генерируем сами
+        await generateAccessCodeForUser(cleanPhone);
+        
+    } else {
+        const attemptsLeft = 5 - appState.verificationAttempts;
+        if (pending) pending.attempts++;
+        
+        if (!pending) {
+            showAuthStatus('Код устарел. Запросите новый.', 'error');
+        } else {
+            showAuthStatus(`Неверный код. Осталось попыток: ${attemptsLeft}`, 'error');
+            elements.verificationCode.focus();
+            elements.verificationCode.select();
+        }
+    }
+}
+
+// ==================== 5. ГЕНЕРАЦИЯ ПОСТОЯННОГО КОДА ДОСТУПА ====================
+async function generateAccessCodeForUser(cleanPhone) {
+    try {
+        // Пытаемся получить код с сервера
+        const response = await fetch(`${API_CONFIG.BASE_URL}/generateAccessCode`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                ...getAuthHeaders()
+            },
+            body: JSON.stringify({
+                number: cleanPhone
+            })
+        });
+        
+        let accessCode;
+        let userData;
+        
+        if (response.ok) {
+            const data = await response.json();
+            accessCode = data.code || data.accessCode || data.token || generateLocalAccessCode();
+            userData = {
+                name: data.name || `Пользователь`,
+                fullName: data.fullName || data.name || `Пользователь`,
+                phone: '+7' + cleanPhone,
+                position: data.position || 'Сотрудник',
+                ...data
+            };
+        } else {
+            // Если API недоступен - генерируем локально
+            accessCode = generateLocalAccessCode();
+            userData = {
+                name: `Пользователь ${cleanPhone.slice(-4)}`,
+                fullName: `Пользователь ${cleanPhone.slice(-4)}`,
+                phone: '+7' + cleanPhone,
+                position: 'Сотрудник'
+            };
+        }
+        
+        // === СОХРАНЯЕМ В КЭШ НАВСЕГДА ===
+        localStorage.setItem(STORAGE_KEYS.ACCESS_CODE, accessCode);
+        localStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(userData));
+        localStorage.setItem(STORAGE_KEYS.PHONE_NUMBER, '+7' + cleanPhone);
+        localStorage.setItem(STORAGE_KEYS.LAST_LOGIN, new Date().toISOString());
+        
+        // Также сохраняем для обратной совместимости
+        localStorage.setItem('employeeAuth', JSON.stringify({
+            ...userData,
+            accessCode: accessCode,
+            loginTime: new Date().toISOString()
+        }));
+        
+        appState.generatedAccessCode = accessCode;
+        appState.userData = userData;
+        
+        // Показываем успех
+        elements.codeStep.style.display = 'none';
+        elements.successStep.style.display = 'block';
+        elements.backToPhoneBtn.style.display = 'none';
+        elements.generatedAccessCode.textContent = accessCode;
+        
+        stopCodeTimer();
+        showAuthStatus('✅ Код доступа сохранен в браузере', 'success');
+        
+        // Удаляем временный код
+        delete window.pendingVerifications?.[cleanPhone];
+        
+        // Автопереход через 3 секунды
+        setTimeout(() => {
+            completeLogin();
+        }, 3000);
+        
+    } catch (error) {
+        console.error('Ошибка генерации кода:', error);
+        
+        // Генерируем локальный код как запасной вариант
+        const accessCode = generateLocalAccessCode();
+        const userData = {
+            name: `Пользователь ${cleanPhone.slice(-4)}`,
+            fullName: `Пользователь ${cleanPhone.slice(-4)}`,
+            phone: '+7' + cleanPhone,
+            position: 'Сотрудник'
+        };
+        
+        localStorage.setItem(STORAGE_KEYS.ACCESS_CODE, accessCode);
+        localStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(userData));
+        localStorage.setItem(STORAGE_KEYS.PHONE_NUMBER, '+7' + cleanPhone);
+        
+        elements.codeStep.style.display = 'none';
+        elements.successStep.style.display = 'block';
+        elements.generatedAccessCode.textContent = accessCode;
+        
+        showAuthStatus('✅ Код сгенерирован локально (сервер недоступен)', 'success');
+        
+        setTimeout(() => completeLogin(), 3000);
+    }
+}
+
+// ==================== 6. ВХОД В СИСТЕМУ ====================
+function completeLogin() {
+    if (appState.userData && appState.generatedAccessCode) {
+        window.location.href = 'cargo.html';
+    }
+}
+
+function continueWithCachedCode() {
+    showAuthStatus('Вход в систему...', 'loading');
+    
+    if (appState.userData) {
+        localStorage.setItem(STORAGE_KEYS.LAST_LOGIN, new Date().toISOString());
+        window.location.href = 'cargo.html';
+    }
+}
+
+// ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+
+// Генерация локального кода доступа
+function generateLocalAccessCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 8; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+}
+
+// Заголовки авторизации для API
+function getAuthHeaders() {
+    // Раскомментируйте и настройте под ваше API
+    /*
+    if (API_CONFIG.AUTH?.type === 'basic') {
+        const credentials = btoa(`${API_CONFIG.AUTH.login}:${API_CONFIG.AUTH.password}`);
+        return { 'Authorization': `Basic ${credentials}` };
+    }
+    if (API_CONFIG.AUTH?.type === 'apikey') {
+        return { 'X-API-Key': API_CONFIG.AUTH.apiKey };
+    }
+    */
+    return {};
+}
+
+// Очистка кэша
+function clearCache() {
+    localStorage.removeItem(STORAGE_KEYS.ACCESS_CODE);
+    localStorage.removeItem(STORAGE_KEYS.USER_DATA);
+    localStorage.removeItem(STORAGE_KEYS.PHONE_NUMBER);
+    localStorage.removeItem(STORAGE_KEYS.LAST_LOGIN);
+}
+
+// Нормализация номера телефона
+function normalizePhoneNumber(phone) {
+    let normalized = phone.replace(/[^\d+]/g, '');
+    if (normalized.startsWith('8')) normalized = '+7' + normalized.substring(1);
+    if (normalized.startsWith('7') && !normalized.startsWith('+7')) normalized = '+' + normalized;
+    if (normalized.match(/^9\d{9}$/)) normalized = '+7' + normalized;
+    return normalized;
+}
+
+// Таймер
+function startCodeTimer() {
+    let seconds = 60;
+    if (appState.timerInterval) clearInterval(appState.timerInterval);
+    
+    elements.codeTimer.style.display = 'block';
+    elements.timerSeconds.textContent = seconds;
+    
+    appState.timerInterval = setInterval(() => {
+        seconds--;
+        elements.timerSeconds.textContent = seconds;
+        
+        if (seconds <= 0) {
+            stopCodeTimer();
+            elements.codeTimer.innerHTML = '<span style="color: #27ae60; cursor: pointer; font-weight: bold;" onclick="resendVerificationCode()">Отправить код повторно</span>';
+        }
+    }, 1000);
+}
+
+function stopCodeTimer() {
+    if (appState.timerInterval) {
+        clearInterval(appState.timerInterval);
+        appState.timerInterval = null;
+    }
+}
+
+async function resendVerificationCode() {
+    if (appState.phoneNumber) {
+        await sendVerificationCode();
+    }
+}
+
+function showAuthStatus(message, type) {
+    if (elements.authStatus) {
+        elements.authStatus.innerHTML = message;
+        elements.authStatus.className = `auth-status ${type || ''}`;
+    }
+    console.log(`[Auth] ${type}: ${message}`);
+}
+
+// ==================== ЭКСПОРТ В ГЛОБАЛЬНУЮ ОБЛАСТЬ ====================
+window.continueWithCachedCode = continueWithCachedCode;
+window.showPhoneInput = showPhoneInput;
+window.sendVerificationCode = sendVerificationCode;
+window.verifyCode = verifyCode;
+window.resendVerificationCode = resendVerificationCode;
+window.completeLogin = completeLogin;
+window.resetToPhoneInput = resetToPhoneInput;

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <title>NORD WHEEL - Авторизация</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+    <div class="container auth-container">
+        <header>
+            <div class="logo">
+                <img src="jpeg/logonwnew.png" alt="NORD WHEEL" class="logo-image" onerror="this.style.display='none'">
+                <span class="logo-text">NORD WHEEL</span>
+            </div>
+        </header>
+
+        <main class="auth-main">
+            <h1>Вход в систему</h1>
+            
+            <!-- Карточка проверки кэшированного кода -->
+            <div class="auth-card" id="cachedCheckCard">
+                <div class="auth-form">
+                    <h3>Проверка авторизации</h3>
+                    <div id="cachedStatus" class="auth-status loading">
+                        Проверка сохраненного кода доступа...
+                    </div>
+                    <div id="cachedActions" style="display: none; margin-top: 20px;">
+                        <button class="btn-auth" onclick="continueWithCachedCode()">Продолжить как <span id="cachedUserName"></span></button>
+                        <button class="btn-secondary" onclick="showPhoneInput()">Войти по другому номеру</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Карточка ввода телефона -->
+            <div class="auth-card" id="phoneInputCard" style="display: none;">
+                <div class="auth-form">
+                    <h3>Вход по номеру телефона</h3>
+                    
+                    <div id="phoneStep" class="step active">
+                        <p>Введите номер телефона</p>
+                        <div class="input-group">
+                            <input type="tel"
+                                   id="phoneNumber"
+                                   placeholder="+7 (900) 123-45-67"
+                                   maxlength="20"
+                                   inputmode="tel"
+                                   autocomplete="tel">
+                        </div>
+                        <button class="btn-auth" onclick="sendVerificationCode()">Получить код</button>
+                    </div>
+                    
+                    <!-- Шаг 2: Ввод кода подтверждения (скрыт) -->
+                    <div id="codeStep" class="step" style="display: none;">
+                        <p>Введите код подтверждения из SMS</p>
+                        <div class="input-group">
+                            <input type="text"
+                                   id="verificationCode"
+                                   placeholder="123456"
+                                   maxlength="6"
+                                   inputmode="numeric"
+                                   pattern="[0-9]{6}">
+                        </div>
+                        <div class="code-timer" id="codeTimer">
+                            Отправить код повторно через <span id="timerSeconds">60</span> сек
+                        </div>
+                        <button class="btn-auth" onclick="verifyCode()">Подтвердить</button>
+                    </div>
+                    
+                    <!-- Шаг 3: Код доступа сгенерирован -->
+                    <div id="successStep" class="step" style="display: none;">
+                        <div class="success-icon">✅</div>
+                        <h3>Доступ предоставлен!</h3>
+                        <p>Ваш код доступа сохранен:</p>
+                        <div class="access-code-display" id="generatedAccessCode"></div>
+                        <p class="small-text">Код сохранен в браузере. При следующем входе вы попадете сразу в систему.</p>
+                        <button class="btn-auth" onclick="completeLogin()">Перейти к работе</button>
+                    </div>
+                    
+                    <!-- Шаг 4: Доступ запрещен -->
+                    <div id="deniedStep" class="step" style="display: none;">
+                        <div class="error-icon">❌</div>
+                        <h3>Доступ запрещен</h3>
+                        <p id="deniedMessage">Ваш номер не найден в системе или у вас нет прав доступа.</p>
+                        <p class="small-text">Обратитесь к администратору для получения доступа.</p>
+                        <button class="btn-secondary" onclick="resetToPhoneInput()">Попробовать другой номер</button>
+                    </div>
+                </div>
+                
+                <!-- Кнопка возврата (показывается на шагах ввода) -->
+                <button class="btn-back" id="backToPhoneBtn" style="display: none;" onclick="resetToPhoneInput()">
+                    ← Вернуться к вводу телефона
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <script src="auth-final.js"></script>
+</body>
+</html>
