@@ -1,4 +1,5 @@
-// auth-final.js - ФИНАЛЬНАЯ ВЕРСИЯ С РЕАЛЬНЫМ API 1С
+// auth-final.js - ФИНАЛЬНАЯ ВЕРСИЯ С РЕАЛЬНЫМ API 1С И МАСКОЙ ТЕЛЕФОНА
+// Код подтверждения - 4 цифры
 
 // ==================== КОНФИГУРАЦИЯ ====================
 const API_CONFIG = {
@@ -36,7 +37,7 @@ let elements = {};
 
 // ==================== ИНИЦИАЛИЗАЦИЯ ====================
 document.addEventListener('DOMContentLoaded', async function() {
-    console.log('NORD WHEEL - Авторизация с API 1С');
+    console.log('NORD WHEEL - Авторизация с API 1С (4-значный код)');
     initElements();
     await checkCachedAccessCode();
 });
@@ -60,13 +61,113 @@ function initElements() {
         elements.phoneNumber.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendVerificationCode();
         });
+        
+        // Устанавливаем +7 и маску ввода
+        setupPhoneInput();
     }
     
     if (elements.verificationCode) {
         elements.verificationCode.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') verifyCode();
         });
+        
+        // Автоматическая проверка при вводе 4 цифр
+        elements.verificationCode.addEventListener('input', function(e) {
+            // Только цифры, максимум 4 символа
+            this.value = this.value.replace(/[^\d]/g, '').substring(0, 4);
+            
+            // Если ввели 4 цифры - автоматически проверяем код
+            if (this.value.length === 4) {
+                setTimeout(() => verifyCode(), 300);
+            }
+        });
     }
+}
+
+// ==================== НАСТРОЙКА ПОЛЯ ТЕЛЕФОНА ====================
+function setupPhoneInput() {
+    const input = elements.phoneNumber;
+    
+    // Устанавливаем начальное значение +7
+    input.value = '+7';
+    input.dataset.cleanNumber = '+7';
+    
+    // Ставим курсор в конец (после +7)
+    setTimeout(() => {
+        input.setSelectionRange(input.value.length, input.value.length);
+    }, 100);
+    
+    // Обработчик ввода
+    input.addEventListener('input', function(e) {
+        let value = this.value;
+        
+        // Всегда начинаем с +7
+        if (!value.startsWith('+7')) {
+            this.value = '+7';
+            this.dataset.cleanNumber = '+7';
+            return;
+        }
+        
+        // Удаляем все нецифровые символы кроме + в начале
+        let digits = value.replace(/[^\d]/g, '');
+        
+        // Оставляем только цифры после +7
+        if (digits.length > 1) {
+            digits = digits.substring(1); // Убираем первую цифру 7
+        } else {
+            digits = '';
+        }
+        
+        // Ограничиваем до 10 цифр
+        digits = digits.substring(0, 10);
+        
+        // Форматируем с пробелами
+        let formatted = '+7';
+        if (digits.length > 0) {
+            formatted += ' ' + digits.substring(0, 3);
+        }
+        if (digits.length > 3) {
+            formatted += ' ' + digits.substring(3, 6);
+        }
+        if (digits.length > 6) {
+            formatted += ' ' + digits.substring(6, 8);
+        }
+        if (digits.length > 8) {
+            formatted += ' ' + digits.substring(8, 10);
+        }
+        
+        this.value = formatted;
+        
+        // Сохраняем чистый номер для отправки
+        if (digits.length === 10) {
+            this.dataset.cleanNumber = '+7' + digits;
+        } else {
+            this.dataset.cleanNumber = '+7' + digits;
+        }
+    });
+    
+    // Обработчик нажатия клавиш
+    input.addEventListener('keydown', function(e) {
+        // Запрещаем удалять +7 полностью
+        if (this.selectionStart <= 2 && (e.key === 'Backspace' || e.key === 'Delete')) {
+            e.preventDefault();
+            // Перемещаем курсор в конец
+            this.setSelectionRange(this.value.length, this.value.length);
+        }
+        
+        // Запрещаем ввод букв
+        if (e.key.length === 1 && !/[0-9]/.test(e.key) && e.key !== '+') {
+            e.preventDefault();
+        }
+    });
+    
+    // Фокус на поле
+    input.addEventListener('focus', function() {
+        // Перемещаем курсор в конец
+        setTimeout(() => {
+            this.setSelectionRange(this.value.length, this.value.length);
+        }, 50);
+    });
 }
 
 // ==================== 1. ПРОВЕРКА КЭШИРОВАННОГО КОДА ====================
@@ -162,7 +263,12 @@ function resetToPhoneInput() {
     elements.deniedStep.style.display = 'none';
     elements.backToPhoneBtn.style.display = 'none';
     
-    if (elements.phoneNumber) elements.phoneNumber.value = '';
+    // Сбрасываем поле телефона на +7
+    if (elements.phoneNumber) {
+        elements.phoneNumber.value = '+7';
+        elements.phoneNumber.dataset.cleanNumber = '+7';
+    }
+    
     if (elements.verificationCode) elements.verificationCode.value = '';
     
     stopCodeTimer();
@@ -171,9 +277,10 @@ function resetToPhoneInput() {
 
 // ==================== 3. ЗАПРОС К 1С: getNewToken ====================
 async function sendVerificationCode() {
-    const phone = elements.phoneNumber.value.trim();
+    // Используем очищенный номер из data-атрибута
+    let phone = elements.phoneNumber.dataset.cleanNumber || elements.phoneNumber.value.trim();
     
-    if (!phone) {
+    if (!phone || phone === '+7') {
         showAuthStatus('Введите номер телефона', 'error');
         elements.phoneNumber.focus();
         return;
@@ -183,7 +290,7 @@ async function sendVerificationCode() {
     const cleanPhone = phone.replace(/\D/g, '').slice(-10);
     
     if (cleanPhone.length !== 10) {
-        showAuthStatus('Введите корректный номер телефона', 'error');
+        showAuthStatus('Введите 10 цифр номера', 'error');
         elements.phoneNumber.focus();
         return;
     }
@@ -217,11 +324,7 @@ async function sendVerificationCode() {
         const data = await response.json();
         console.log('📦 Ответ от 1С:', data);
         
-        // ВАЖНО: Адаптируйте под формат ответа вашего API!
-        // Предполагаем, что API возвращает:
-        // { success: true, code: "123456", message: "..." }
-        
-        // Проверяем, что код пришел
+        // Адаптируйте под формат ответа вашего API!
         let verificationCode = null;
         
         if (data.code) {
@@ -231,10 +334,13 @@ async function sendVerificationCode() {
         } else if (data.token) {
             verificationCode = data.token;
         } else {
-            // Если API не возвращает код - генерируем тестовый
-            verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+            // Если API не возвращает код - генерируем тестовый (4 цифры)
+            verificationCode = Math.floor(1000 + Math.random() * 9000).toString();
             console.log('⚠️ API не вернул код, используем тестовый:', verificationCode);
         }
+        
+        // Убеждаемся что код 4-значный
+        verificationCode = verificationCode.toString().padStart(4, '0').slice(0, 4);
         
         // Сохраняем данные
         appState.phoneNumber = '+7' + cleanPhone;
@@ -269,7 +375,6 @@ async function sendVerificationCode() {
         console.error('❌ Ошибка при запросе к 1С:', error);
         
         // === РЕЖИМ ТЕСТИРОВАНИЯ ===
-        // Если API недоступен - используем тестовый режим
         if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
             console.log('🔄 Тестовый режим: эмуляция API');
             emulateTestMode(cleanPhone);
@@ -279,9 +384,9 @@ async function sendVerificationCode() {
     }
 }
 
-// Тестовый режим для разработки
+// Тестовый режим для разработки (4-значный код)
 function emulateTestMode(cleanPhone) {
-    const testCode = '123456';
+    const testCode = '1234'; // 4 цифры для теста
     
     appState.phoneNumber = '+7' + cleanPhone;
     
@@ -308,12 +413,12 @@ function emulateTestMode(cleanPhone) {
     showAuthStatus(`🔧 ТЕСТОВЫЙ РЕЖИМ. Код: ${testCode}`, 'success');
 }
 
-// ==================== 4. ПРОВЕРКА КОДА ====================
+// ==================== 4. ПРОВЕРКА КОДА (4 цифры) ====================
 async function verifyCode() {
     const code = elements.verificationCode.value.trim();
     
-    if (!code || code.length !== 6 || !/^\d+$/.test(code)) {
-        showAuthStatus('Введите 6-значный код', 'error');
+    if (!code || code.length !== 4 || !/^\d+$/.test(code)) {
+        showAuthStatus('Введите 4-значный код', 'error');
         elements.verificationCode.focus();
         return;
     }
@@ -337,7 +442,6 @@ async function verifyCode() {
         showAuthStatus('Код подтвержден! Получаем доступ...', 'loading');
         
         // Здесь API должен вернуть постоянный код доступа
-        // Если такого эндпоинта нет - генерируем сами
         await generateAccessCodeForUser(cleanPhone);
         
     } else {
@@ -441,6 +545,7 @@ async function generateAccessCodeForUser(cleanPhone) {
         localStorage.setItem(STORAGE_KEYS.ACCESS_CODE, accessCode);
         localStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(userData));
         localStorage.setItem(STORAGE_KEYS.PHONE_NUMBER, '+7' + cleanPhone);
+        localStorage.setItem(STORAGE_KEYS.LAST_LOGIN, new Date().toISOString());
         
         elements.codeStep.style.display = 'none';
         elements.successStep.style.display = 'block';
@@ -470,7 +575,7 @@ function continueWithCachedCode() {
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
-// Генерация локального кода доступа
+// Генерация локального кода доступа (8 символов)
 function generateLocalAccessCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
@@ -501,15 +606,6 @@ function clearCache() {
     localStorage.removeItem(STORAGE_KEYS.USER_DATA);
     localStorage.removeItem(STORAGE_KEYS.PHONE_NUMBER);
     localStorage.removeItem(STORAGE_KEYS.LAST_LOGIN);
-}
-
-// Нормализация номера телефона
-function normalizePhoneNumber(phone) {
-    let normalized = phone.replace(/[^\d+]/g, '');
-    if (normalized.startsWith('8')) normalized = '+7' + normalized.substring(1);
-    if (normalized.startsWith('7') && !normalized.startsWith('+7')) normalized = '+' + normalized;
-    if (normalized.match(/^9\d{9}$/)) normalized = '+7' + normalized;
-    return normalized;
 }
 
 // Таймер
